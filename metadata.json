@@ -1,6 +1,0 @@
-{
-  "name": "LumaAI",
-  "description": "An intelligent AI assistant created by Kurdish Co, featuring multi-language support and pitch-dark theme.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}
