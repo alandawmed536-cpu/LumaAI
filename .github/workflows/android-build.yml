@@ -1,5 +1,10 @@
 name: Build Android APK
 
+permissions:
+  contents: write
+  packages: write
+  actions: read
+
 on:
   push:
     branches: [ main ]
@@ -16,6 +21,14 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '17'
+
+      - name: Debug: show Java and Gradle versions, list files
+        run: |
+          java -version || true
+          gradle -v || true
+          ls -la
+          ls -la android_app || true
+          ls -la android_app/app || true
 
       - name: Install Android SDK commandline tools
         run: |
@@ -38,11 +51,13 @@ jobs:
 
       - name: Generate Gradle wrapper
         working-directory: android_app
-        run: gradle wrapper
+        run: gradle wrapper || true
 
       - name: Build APK (debug)
         working-directory: android_app
-        run: ./gradlew assembleDebug --no-daemon
+        run: |
+          chmod +x gradlew || true
+          ./gradlew assembleDebug --no-daemon --stacktrace
 
       - name: Find APK (debug)
         id: find_apk
