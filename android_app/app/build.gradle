@@ -1,15 +1,18 @@
-plugins {
-    id 'com.android.application'
+apply plugin: 'com.android.application'
+
+repositories {
+    google()
+    mavenCentral()
 }
 
 android {
     namespace 'com.example.ollamachat'
-    compileSdk 33
+    compileSdk 34
 
     defaultConfig {
         applicationId "com.example.ollamachat"
         minSdk 21
-        targetSdk 33
+        targetSdk 34
         versionCode 1
         versionName "1.0"
     }
