@@ -55,9 +55,7 @@ jobs:
 
       - name: Build APK (debug)
         working-directory: android_app
-        run: |
-          chmod +x gradlew || true
-          ./gradlew assembleDebug --no-daemon --stacktrace
+        run: gradle assembleDebug --no-daemon --stacktrace
 
       - name: Find APK (debug)
         id: find_apk
