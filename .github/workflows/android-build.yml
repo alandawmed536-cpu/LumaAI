@@ -1,0 +1,144 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Install Android SDK commandline tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y unzip wget
+          export ANDROID_SDK_ROOT=$HOME/android-sdk
+          mkdir -p $ANDROID_SDK_ROOT/cmdline-tools
+          wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip -O /tmp/cmdline.zip
+          unzip -q /tmp/cmdline.zip -d /tmp/cmdline
+          mkdir -p $ANDROID_SDK_ROOT/cmdline-tools/latest
+          mv /tmp/cmdline/cmdline-tools/* $ANDROID_SDK_ROOT/cmdline-tools/latest/
+          export PATH=$PATH:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin
+          yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --sdk_root=$ANDROID_SDK_ROOT --install "platform-tools" "platforms;android-33" "build-tools;33.0.2"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
+          echo "$ANDROID_SDK_ROOT/platform-tools" >> $GITHUB_PATH
+
+      - name: Install Gradle
+        run: |
+          sudo apt-get install -y gradle
+
+      - name: Generate Gradle wrapper
+        working-directory: android_app
+        run: gradle wrapper
+
+      - name: Build APK
+        working-directory: android_app
+        run: ./gradlew assembleRelease --no-daemon
+
+      - name: Find APK
+        id: find_apk
+        run: |
+          apk=$(find $GITHUB_WORKSPACE/android_app/app/build/outputs -name "*.apk" | head -n1)
+          echo "apk_path=$apk" >> $GITHUB_OUTPUT
+
+      - name: Ensure Release `latest-build` and upload APK
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          APK_PATH="${{ steps.find_apk.outputs.apk_path }}"
+          if [ -z "$APK_PATH" ] || [ ! -f "$APK_PATH" ]; then
+            echo "APK not found at $APK_PATH"
+            exit 1
+          fi
+          API="https://api.github.com/repos/${GITHUB_REPOSITORY}"
+          TAG="latest-build"
+
+          echo "Checking for existing release with tag $TAG..."
+          release_json=$(curl -s -H "Authorization: token $GITHUB_TOKEN" "$API/releases/tags/$TAG" || true)
+          release_id=$(python3 - <<'PY'
+import sys, json
+s=sys.stdin.read()
+if not s.strip():
+    print("")
+    sys.exit(0)
+try:
+    j=json.loads(s)
+    print(j.get('id',''))
+except:
+    print("")
+PY
+          <<<"$release_json")
+
+          if [ -n "$release_id" ]; then
+            echo "Found release id $release_id"
+            assets_json=$(curl -s -H "Authorization: token $GITHUB_TOKEN" "$API/releases/$release_id/assets")
+            asset_id=$(python3 - <<'PY'
+import sys,json
+j=json.load(sys.stdin)
+for a in j:
+    if a.get('name') == 'app-release.apk':
+        print(a.get('id'))
+        break
+PY
+            <<<"$assets_json")
+            if [ -n "$asset_id" ]; then
+              echo "Deleting existing asset id $asset_id"
+              curl -s -X DELETE -H "Authorization: token $GITHUB_TOKEN" "$API/releases/assets/$asset_id"
+            fi
+          else
+            echo "Creating release $TAG"
+            create_resp=$(curl -s -X POST -H "Authorization: token $GITHUB_TOKEN" -d "{\"tag_name\": \"$TAG\", \"name\": \"$TAG\", \"body\": \"Automated latest APK\", \"draft\": false, \"prerelease\": false}" "$API/releases")
+            release_id=$(python3 - <<'PY'
+import sys,json
+j=json.load(sys.stdin)
+print(j.get('id',''))
+PY
+            <<<"$create_resp")
+          fi
+
+          upload_url=$(curl -s -H "Authorization: token $GITHUB_TOKEN" "$API/releases/$release_id" | python3 - <<'PY'
+import sys,json
+j=json.load(sys.stdin)
+u=j.get('upload_url','')
+print(u.split('{')[0] if u else '')
+PY
+          )
+
+          if [ -z "$upload_url" ]; then
+            echo "Could not determine upload_url for release $release_id"
+            exit 1
+          fi
+
+          echo "Uploading $APK_PATH to release $TAG"
+          curl -s -X POST -H "Authorization: token $GITHUB_TOKEN" -H "Content-Type: application/vnd.android.package-archive" --data-binary @"$APK_PATH" "$upload_url?name=app-release.apk" -o /tmp/upload.json
+          echo "Public download URL: https://github.com/${GITHUB_REPOSITORY}/releases/download/$TAG/app-release.apk"
+          echo "PUBLIC_APK_URL=https://github.com/${GITHUB_REPOSITORY}/releases/download/$TAG/app-release.apk" >> $GITHUB_ENV
+
+      - name: Upload APK to public host (transfer.sh) [optional]
+        if: always()
+        run: |
+          APK_PATH="${{ steps.find_apk.outputs.apk_path }}"
+          if [ -f "$APK_PATH" ]; then
+            echo "Uploading to transfer.sh..."
+            url=$(curl --silent --upload-file "$APK_PATH" https://transfer.sh/$(basename "$APK_PATH"))
+            echo "Public APK URL: $url"
+            echo "PUBLIC_APK_URL=$url" >> $GITHUB_ENV
+          else
+            echo "APK not found: $APK_PATH"
+          fi
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release-apk
+          path: android_app/app/build/outputs/**/release/*.apk
